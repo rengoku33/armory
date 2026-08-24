@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Armory",
+    "slug": "armory",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0D12",
+    "scheme": "armory",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.rengoku.armory"
+    },
+    "android": {
+      "package": "com.rengoku.armory",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0D12",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-web-browser"
+    ]
+  }
+}
