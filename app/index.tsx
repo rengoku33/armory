@@ -55,7 +55,8 @@ export default function Index() {
   const { loading, session, profile, signOut } = useAuth();
 
   if (!supabaseConfigured) return <SetupNotice />;
-  if (loading || !session) return <Splash />;
+  if (loading) return <Splash />;
+  if (!session) return <Redirect href="/login" />;
   if (!profile) {
     return (
       <View
