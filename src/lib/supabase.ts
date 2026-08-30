@@ -11,11 +11,11 @@ export const supabase = createClient(
   SUPABASE_URL || 'https://placeholder.supabase.co',
   SUPABASE_ANON_KEY || 'public-anon-key',
   {
-    auth: {
-      storage: AsyncStorage as never,
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-    },
+      auth: {
+        storage: AsyncStorage as never,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: typeof window !== 'undefined',
+      },
   }
 );
