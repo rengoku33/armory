@@ -4,9 +4,8 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { format, parseISO } from 'date-fns';
 import { useAuth } from '@/store/auth';
 import { fetchHistory } from '@/lib/queries';
-import { EXERCISES } from '@/lib/exercises';
 import { trim } from '@/lib/weights';
-import type { LiftId, Workout, WorkoutSet } from '@/lib/types';
+import type { Workout, WorkoutSet } from '@/lib/types';
 import { Badge } from '@/components/ui';
 import { colors, radius, space } from '@/theme';
 
@@ -94,10 +93,13 @@ export default function History() {
               const done = sets.filter((s) => s.completed);
               const ratio = `${done.length}/${sets.length}`;
               const full = done.length === sets.length && sets.length > 0;
-              const liftChips = new Map<LiftId, number>();
+              const exChips = new Map<string, { name: string; weight: number }>();
               for (const s of done) {
                 const w = s.weight ?? s.target_weight;
-                liftChips.set(s.exercise, Math.max(liftChips.get(s.exercise) ?? 0, w));
+                const prev = exChips.get(s.exercise);
+                if (!prev || w > prev.weight) {
+                  exChips.set(s.exercise, { name: s.exercise_name, weight: w });
+                }
               }
               return (
                 <Pressable
@@ -140,9 +142,9 @@ export default function History() {
                       {format(parseISO(workout.started_at), 'EEE d MMM')}
                     </Text>
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space(1.5), marginTop: 2 }}>
-                      {[...liftChips.entries()].map(([lift, w]) => (
+                      {[...exChips.entries()].map(([key, c]) => (
                         <View
-                          key={lift}
+                          key={key}
                           style={{
                             backgroundColor: colors.surfaceAlt,
                             borderRadius: radius.pill,
@@ -151,7 +153,7 @@ export default function History() {
                           }}
                         >
                           <Text style={{ color: colors.muted, fontSize: 11, fontWeight: '700' }}>
-                            {EXERCISES[lift].short} {trim(w)}{unit}
+                            {c.name.slice(0, 3).toUpperCase()} {trim(c.weight)}{unit}
                           </Text>
                         </View>
                       ))}

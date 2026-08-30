@@ -1,19 +1,25 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { Link, router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '@/lib/supabase';
 import { signInWithGoogle } from '@/lib/oauth';
+import { useAuth } from '@/store/auth';
 import { Button, Field } from '@/components/ui';
 import { colors, space } from '@/theme';
 
 export default function Signup() {
+  const { session } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
+
+  useEffect(() => {
+    if (session) router.replace('/');
+  }, [session]);
 
   const googleSignIn = async () => {
     setError(null);
@@ -25,7 +31,6 @@ export default function Signup() {
       return;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    router.replace('/');
   };
 
   const emailSignUp = async () => {
@@ -41,12 +46,10 @@ export default function Signup() {
       setError(err.message);
       return;
     }
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     if (!data.session) {
       setInfo('Check your inbox and confirm your email, then sign in.');
-      return;
     }
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    router.replace('/');
   };
 
   return (

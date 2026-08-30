@@ -77,5 +77,5 @@ export default function Index() {
     );
   }
   if (!profile.onboarded) return <Redirect href="/onboarding" />;
-  return <Redirect href="/(tabs)" />;
+  return <Redirect href="/(tabs)/today" />;
 }
