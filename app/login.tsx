@@ -12,15 +12,23 @@ import * as Haptics from 'expo-haptics';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '@/lib/supabase';
 import { signInWithGoogle } from '@/lib/oauth';
+import { useAuth } from '@/store/auth';
 import { Button, Field } from '@/components/ui';
 import { colors, space } from '@/theme';
 
 export default function Login() {
+  const { session } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
+
+  // When a session is confirmed by the auth provider, leave the login screen.
+  // The root index guard routes the user to onboarding or the app.
+  useEffect(() => {
+    if (session) router.replace('/');
+  }, [session]);
 
   useEffect(() => {
     void WebBrowser.warmUpAsync().catch(() => {});
@@ -39,7 +47,6 @@ export default function Login() {
       return;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    router.replace('/');
   };
 
   const emailSignIn = async () => {
@@ -55,7 +62,6 @@ export default function Login() {
       return;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    router.replace('/');
   };
 
   return (

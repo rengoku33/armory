@@ -14,6 +14,7 @@
     },
     "android": {
       "package": "com.rengoku.armory",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0A0D12",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -28,7 +29,15 @@
     },
     "plugins": [
       "expo-router",
-      "expo-web-browser"
-    ]
+      "expo-web-browser",
+      "expo-font"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "2b8762be-a3ad-4dd9-8c92-c097f5b79a03"
+      }
+    },
+    "owner": "kiranvigneshs-team"
   }
 }

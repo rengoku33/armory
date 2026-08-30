@@ -15,6 +15,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="workout/[id]" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="edit-workout" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen name="login" options={{ animation: 'fade' }} />
         <Stack.Screen name="signup" options={{ animation: 'fade' }} />

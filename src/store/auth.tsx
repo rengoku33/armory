@@ -38,17 +38,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
 
-    const loadProfile = async (nextSession: Session) => {
+    const loadProfile = async (nextSession: Session, retries = 3) => {
       if (fetchedFor.current === nextSession.user.id) return;
       fetchedFor.current = nextSession.user.id;
-      try {
-        const p = await fetchProfile(nextSession.user.id);
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const p = await fetchProfile(nextSession.user.id);
+          if (!active) return;
+          if (p) {
+            setProfile(p);
+            return;
+          }
+        } catch {
+          /* transient error; retry below */
+        }
         if (!active) return;
-        setProfile(p);
-      } catch {
-        if (!active) return;
-        setProfile(null);
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
+      if (active) setProfile(null);
     };
 
     supabase.auth.getSession().then(async ({ data }) => {

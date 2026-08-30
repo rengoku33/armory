@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useAuth } from '@/store/auth';
 import { updateUnits } from '@/lib/queries';
@@ -8,6 +9,7 @@ import { Button, Card, ConfirmDialog, Segmented } from '@/components/ui';
 import { colors, space } from '@/theme';
 
 export default function Settings() {
+  const router = useRouter();
   const { session, profile, refreshProfile, signOut } = useAuth();
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
@@ -71,11 +73,14 @@ export default function Settings() {
             PROGRAM
           </Text>
           <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 21 }}>
-            StrongLifts 5×5 · alternate A and B, three sessions a week.{'\n'}
-            A — Squat, Bench Press, Row · 5×5{'\n'}
-            B — Squat, Overhead Press, Deadlift 1×5{'\n'}
-            Fail three sessions at a weight → deload 10%.
+            Workout A — Squat, Bench, Overhead Press.{'\n'}
+            Workout B — Squat, Barbell Row, Deadlift.{'\n'}
+            Add your own exercises to either day, adjust sets & reps, and choose every weight as you
+            log. No automatic deloads.
           </Text>
+          <Pressable hitSlop={8} onPress={() => router.push('/edit-workout')} style={{ marginTop: space(2) }}>
+            <Text style={{ color: colors.accent, fontWeight: '800' }}>Edit workouts →</Text>
+          </Pressable>
         </Card>
 
         <Button

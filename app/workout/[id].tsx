@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -15,18 +15,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/store/auth';
 import {
   completeWorkout,
+  deleteSet,
   discardWorkout,
   fetchWorkoutWithSets,
   logSet,
 } from '@/lib/queries';
-import { EXERCISES, liftsForDay } from '@/lib/exercises';
-import { warmupSets } from '@/lib/warmups';
 import { SMALLEST_PLATE, fmtWeight } from '@/lib/weights';
 import type { WorkoutSet } from '@/lib/types';
 import { Badge, Button, ConfirmDialog, Stepper } from '@/components/ui';
-import { RestTimer } from '@/components/RestTimer';
 import { PlateCalculatorModal } from '@/components/PlateCalculatorModal';
 import { colors, radius, space } from '@/theme';
+
+interface Group {
+  key: string;
+  name: string;
+  sets: WorkoutSet[];
+}
 
 export default function WorkoutPlayer() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -43,13 +47,13 @@ export default function WorkoutPlayer() {
   const [loading, setLoading] = useState(true);
   const [logTarget, setLogTarget] = useState<WorkoutSet | null>(null);
   const [calcWeight, setCalcWeight] = useState<number | null>(null);
-  const [restSec, setRestSec] = useState(0);
-  const [restKey, setRestKey] = useState(0);
-  const [warmDone, setWarmDone] = useState<Record<string, boolean>>({});
-  const [warmOpen, setWarmOpen] = useState<Record<string, boolean>>({});
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmSetDelete, setConfirmSetDelete] = useState<WorkoutSet | null>(null);
   const [finishing, setFinishing] = useState(false);
+
+  // Guard against onPress firing right after onLongPress.
+  const longFired = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -74,21 +78,43 @@ export default function WorkoutPlayer() {
 
   const readonly = !!workoutMeta?.completed_at;
 
-  const groups = useMemo(() => {
-    if (!workoutMeta) return [];
-    return liftsForDay(workoutMeta.day).map((lift) => ({
-      lift,
-      def: EXERCISES[lift],
-      sets: sets.filter((s) => s.exercise === lift).sort((a, b) => a.set_index - b.set_index),
+  const groups = useMemo<Group[]>(() => {
+    const map = new Map<string, WorkoutSet[]>();
+    for (const s of sets) {
+      const arr = map.get(s.exercise) ?? [];
+      arr.push(s);
+      map.set(s.exercise, arr);
+    }
+    return [...map.entries()].map(([key, rows]) => ({
+      key,
+      name: rows[0].exercise_name,
+      sets: [...rows].sort((a, b) => a.set_index - b.set_index),
     }));
-  }, [workoutMeta, sets]);
+  }, [sets]);
 
   const loggedCount = sets.filter((s) => s.completed).length;
 
-  const startRest = useCallback((seconds: number) => {
-    setRestSec(seconds);
-    setRestKey((k) => k + 1);
-  }, []);
+  // One-tap log: mark complete at the target (suggested) weight and reps.
+  const quickLog = async (target: WorkoutSet) => {
+    setSets((prev) =>
+      prev.map((s) =>
+        s.id === target.id
+          ? {
+              ...s,
+              weight: s.weight ?? s.target_weight,
+              reps: s.reps ?? s.target_reps,
+              completed: true,
+            }
+          : s
+      )
+    );
+    void Haptics.selectionAsync().catch(() => {});
+    logSet(target.id, {
+      weight: target.weight ?? target.target_weight,
+      reps: target.reps ?? target.target_reps,
+      completed: true,
+    }).catch(() => {});
+  };
 
   const confirmLog = async (target: WorkoutSet, weight: number, reps: number) => {
     setSets((prev) =>
@@ -97,14 +123,13 @@ export default function WorkoutPlayer() {
     setLogTarget(null);
     void Haptics.selectionAsync().catch(() => {});
     logSet(target.id, { weight, reps, completed: true }).catch(() => {});
+  };
 
-    const flatOrder = groups.flatMap((g) => g.sets.map((s) => s.id));
-    const idx = flatOrder.indexOf(target.id);
-    const isLast = idx === flatOrder.length - 1;
-    if (!isLast) {
-      const groupOfTarget = groups.find((g) => g.lift === target.exercise)!;
-      startRest(groupOfTarget.def.restSec);
-    }
+  const deleteOneSet = async (target: WorkoutSet) => {
+    setSets((prev) => prev.filter((s) => s.id !== target.id));
+    setConfirmSetDelete(null);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    deleteSet(target.id).catch(() => {});
   };
 
   const finish = async () => {
@@ -113,7 +138,7 @@ export default function WorkoutPlayer() {
     try {
       await completeWorkout(id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      router.replace('/(tabs)');
+      router.replace('/(tabs)/today');
     } finally {
       setFinishing(false);
     }
@@ -121,7 +146,7 @@ export default function WorkoutPlayer() {
 
   const discard = async () => {
     await discardWorkout(id);
-    router.replace('/(tabs)');
+    router.replace('/(tabs)/today');
   };
 
   if (loading || !workoutMeta) {
@@ -141,11 +166,7 @@ export default function WorkoutPlayer() {
     >
       <View style={{ paddingTop: space(14), paddingHorizontal: space(5), gap: space(3) }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Pressable
-            hitSlop={8}
-            onPress={() => router.back()}
-            style={{ padding: 4 }}
-          >
+          <Pressable hitSlop={8} onPress={() => router.back()} style={{ padding: 4 }}>
             <Ionicons name="chevron-back" size={26} color={colors.text} />
           </Pressable>
           <View style={{ alignItems: 'center', gap: 2 }}>
@@ -156,13 +177,10 @@ export default function WorkoutPlayer() {
               {format(parseISO(workoutMeta.started_at), 'EEE d MMM · HH:mm')}
             </Text>
           </View>
-          {!readonly ? (
-            <Pressable hitSlop={8} onPress={() => setConfirmDiscard(true)} style={{ padding: 4 }}>
-              <Ionicons name="trash-outline" size={20} color={colors.danger} />
-            </Pressable>
-          ) : (
-            <Badge label="COMPLETED" tone="success" />
-          )}
+          {readonly ? <Badge label="COMPLETED" tone="success" /> : null}
+          <Pressable hitSlop={8} onPress={() => setConfirmDiscard(true)} style={{ padding: 4, marginLeft: 6 }}>
+            <Ionicons name="trash-outline" size={20} color={colors.danger} />
+          </Pressable>
         </View>
         <View style={{ height: 4, borderRadius: 2, backgroundColor: colors.surfaceAlt, overflow: 'hidden' }}>
           <View
@@ -179,13 +197,11 @@ export default function WorkoutPlayer() {
       <ScrollView
         contentContainerStyle={{ padding: space(5), gap: space(4), paddingBottom: space(12) }}
       >
-        {groups.map(({ lift, def, sets: rows }) => {
-          const first = rows[0];
-          const warmups = !readonly && first ? warmupSets(first.target_weight, unit) : [];
+        {groups.map(({ key, name, sets: rows }) => {
           const allDone = rows.every((r) => r.completed);
           return (
             <View
-              key={lift}
+              key={key}
               style={{
                 backgroundColor: colors.surface,
                 borderColor: allDone ? colors.successSoft : colors.border,
@@ -206,79 +222,44 @@ export default function WorkoutPlayer() {
                     justifyContent: 'center',
                   }}
                 >
-                  <Text style={{ color: colors.accent, fontWeight: '900', fontSize: 13 }}>
-                    {def.short}
+                  <Text style={{ color: colors.accent, fontWeight: '900', fontSize: 12 }}>
+                    {rows[0].exercise_name.slice(0, 3).toUpperCase()}
                   </Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontWeight: '800', fontSize: 16 }}>{def.name}</Text>
+                  <Text style={{ color: colors.text, fontWeight: '800', fontSize: 16 }}>{name}</Text>
                   <Text style={{ color: colors.faint, fontSize: 12 }}>
-                    {def.sets} × {def.reps} @ {fmtWeight(first?.target_weight ?? 0, unit)} · rest{' '}
-                    {Math.round(def.restSec / 60)}m+
+                    {rows.length} × {rows[0].target_reps} @ {fmtWeight(rows[0].target_weight, unit)}
                   </Text>
                 </View>
-                <Pressable hitSlop={8} onPress={() => setCalcWeight(first?.target_weight ?? null)}>
+                <Pressable hitSlop={8} onPress={() => setCalcWeight(rows[0].target_weight)}>
                   <Ionicons name="calculator-outline" size={22} color={colors.muted} />
                 </Pressable>
               </View>
 
-              {warmups.length > 0 ? (
-                <View style={{ gap: space(1.5) }}>
-                  <Pressable
-                    hitSlop={6}
-                    onPress={() => setWarmOpen((o) => ({ ...o, [lift]: !o[lift] }))}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-                  >
-                    <Ionicons
-                      name={warmOpen[lift] ? 'chevron-down' : 'chevron-forward'}
-                      size={16}
-                      color={colors.faint}
-                    />
-                    <Text style={{ color: colors.faint, fontSize: 12, fontWeight: '700' }}>
-                      WARMUP ({warmups.filter((_, i) => warmDone[`${lift}-${i}`]).length}/{warmups.length})
-                    </Text>
-                  </Pressable>
-                  {warmOpen[lift]
-                    ? warmups.map((wset, i) => {
-                        const key = `${lift}-${i}`;
-                        const done = !!warmDone[key];
-                        return (
-                          <Pressable
-                            key={key}
-                            disabled={readonly}
-                            onPress={() => setWarmDone((d) => ({ ...d, [key]: !d[key] }))}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              gap: space(2),
-                              opacity: readonly ? 0.5 : 1,
-                              paddingVertical: 2,
-                            }}
-                          >
-                            <Ionicons
-                              name={done ? 'checkmark-circle' : 'ellipse-outline'}
-                              size={20}
-                              color={done ? colors.success : colors.border}
-                            />
-                            <Text style={{ color: colors.muted, fontSize: 13 }}>
-                              {fmtWeight(wset.weight, unit)} × {wset.reps}
-                            </Text>
-                          </Pressable>
-                        );
-                      })
-                    : null}
-                </View>
-              ) : null}
-
               <View style={{ gap: space(1.5) }}>
                 {rows.map((s) => {
-                  const failed =
-                    s.completed && s.reps != null && s.reps < s.target_reps;
+                  const failed = s.completed && s.reps != null && s.reps < s.target_reps;
                   return (
                     <Pressable
                       key={s.id}
-                      disabled={readonly}
-                      onPress={() => setLogTarget(s)}
+                      delayLongPress={350}
+                      onPressIn={() => {
+                        longFired.current = false;
+                      }}
+                      onLongPress={() => {
+                        longFired.current = true;
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                        setLogTarget(s);
+                      }}
+                      onPress={() => {
+                        if (longFired.current) return;
+                        if (!readonly && !s.completed) {
+                          void quickLog(s);
+                          return;
+                        }
+                        setLogTarget(s);
+                      }}
                       style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
@@ -320,8 +301,8 @@ export default function WorkoutPlayer() {
                         {failed ? `  (missed ${s.target_reps - (s.reps ?? 0)})` : ''}
                       </Text>
                       {!readonly && !s.completed ? (
-                        <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 12 }}>
-                          LOG
+                        <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 11 }}>
+                          TAP
                         </Text>
                       ) : null}
                     </Pressable>
@@ -331,23 +312,19 @@ export default function WorkoutPlayer() {
             </View>
           );
         })}
-
-        {readonly ? (
-          <Cardless note={`Finished ${format(parseISO(workoutMeta.completed_at ?? workoutMeta.started_at), 'EEE d MMM, HH:mm')}`} />
-        ) : null}
       </ScrollView>
 
       {!readonly ? (
         <View style={{ paddingHorizontal: space(5), paddingBottom: space(4), gap: space(2.5) }}>
-          {restSec > 0 ? (
-            <RestTimer key={restKey} seconds={restSec} onDone={() => setRestSec(0)} onSkip={() => setRestSec(0)} />
-          ) : null}
           <Button
             label={loggedCount < sets.length ? `Finish (${sets.length - loggedCount} unlogged)` : 'Finish workout'}
             variant="success"
             loading={finishing}
             onPress={() => (loggedCount < sets.length ? setConfirmFinish(true) : void finish())}
           />
+          <Text style={{ color: colors.faint, fontSize: 11, textAlign: 'center' }}>
+            Tap a set to log it as {unit === 'kg' ? 'the target weight' : 'the target weight'}. Long-press to adjust.
+          </Text>
         </View>
       ) : null}
 
@@ -355,12 +332,17 @@ export default function WorkoutPlayer() {
         {logTarget ? (
           <LogSheet
             setName={`Set ${logTarget.set_index}`}
-            exerciseName={EXERCISES[logTarget.exercise].name}
+            exerciseName={logTarget.exercise_name}
             initialWeight={logTarget.weight ?? logTarget.target_weight}
-            initialReps={logTarget.target_reps}
+            initialReps={logTarget.reps ?? logTarget.target_reps}
             unit={unit}
             onCancel={() => setLogTarget(null)}
             onConfirm={(w, r) => void confirmLog(logTarget, w, r)}
+            onDelete={() => {
+              const t = logTarget;
+              setLogTarget(null);
+              setConfirmSetDelete(t);
+            }}
           />
         ) : null}
       </Modal>
@@ -370,7 +352,7 @@ export default function WorkoutPlayer() {
       <ConfirmDialog
         visible={confirmFinish}
         title={`${sets.length - loggedCount} sets unlogged`}
-        message="Unlogged sets count as missed. Finish anyway?"
+        message="Unlogged sets stay empty in your history. Finish anyway?"
         confirmLabel="Finish"
         danger
         onConfirm={() => {
@@ -381,9 +363,9 @@ export default function WorkoutPlayer() {
       />
       <ConfirmDialog
         visible={confirmDiscard}
-        title="Discard workout?"
-        message="All logged sets from this session will be deleted."
-        confirmLabel="Discard"
+        title="Delete this workout?"
+        message="The entire workout and all of its logged sets will be deleted from your history. This cannot be undone."
+        confirmLabel="Delete"
         danger
         onConfirm={() => {
           setConfirmDiscard(false);
@@ -391,24 +373,18 @@ export default function WorkoutPlayer() {
         }}
         onCancel={() => setConfirmDiscard(false)}
       />
+      {confirmSetDelete ? (
+        <ConfirmDialog
+          visible
+          title="Delete this set?"
+          message={`${confirmSetDelete.exercise_name} · Set ${confirmSetDelete.set_index} will be removed from your history.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => void deleteOneSet(confirmSetDelete)}
+          onCancel={() => setConfirmSetDelete(null)}
+        />
+      ) : null}
     </KeyboardAvoidingView>
-  );
-}
-
-function Cardless({ note }: { note: string }) {
-  return (
-    <View
-      style={{
-        backgroundColor: colors.surfaceAlt,
-        borderColor: colors.border,
-        borderWidth: 1,
-        borderRadius: radius.md,
-        padding: space(3),
-        alignItems: 'center',
-      }}
-    >
-      <Text style={{ color: colors.faint, fontSize: 12 }}>{note}</Text>
-    </View>
   );
 }
 
@@ -420,6 +396,7 @@ function LogSheet({
   unit,
   onCancel,
   onConfirm,
+  onDelete,
 }: {
   setName: string;
   exerciseName: string;
@@ -428,6 +405,7 @@ function LogSheet({
   unit: string;
   onCancel: () => void;
   onConfirm: (weight: number, reps: number) => void;
+  onDelete: () => void;
 }) {
   const [weight, setWeight] = useState(initialWeight);
   const [reps, setReps] = useState(initialReps);
@@ -462,11 +440,12 @@ function LogSheet({
         </View>
         {reps < initialReps ? (
           <Text style={{ color: colors.warn, fontSize: 12, textAlign: 'center' }}>
-            Below target — this counts as a failed set.
+            Below target — counted as a missed set.
           </Text>
         ) : null}
         <Button label="Log set" variant="primary" onPress={() => onConfirm(weight, reps)} />
         <Button label="Cancel" variant="ghost" onPress={onCancel} />
+        <Button label="Delete this set" variant="danger" onPress={onDelete} />
       </View>
     </View>
   );

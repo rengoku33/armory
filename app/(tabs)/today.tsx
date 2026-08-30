@@ -1,15 +1,20 @@
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { format } from 'date-fns';
+import { addDays, format } from 'date-fns';
 import { useAuth } from '@/store/auth';
-import { fetchHistory, fetchOpenWorkout, createWorkout } from '@/lib/queries';
-import { buildSessions, deriveProgram, nextWorkoutPlan } from '@/lib/program';
-import { EXERCISES } from '@/lib/exercises';
-import { fmtWeight } from '@/lib/weights';
-import type { Workout } from '@/lib/types';
-import { Badge, Button, Card } from '@/components/ui';
+import {
+  createWorkout,
+  fetchHistory,
+  fetchLastWeights,
+  fetchOpenWorkout,
+  fetchTemplates,
+} from '@/lib/queries';
+import { buildPlan, nextDay } from '@/lib/program';
+import { SMALLEST_PLATE, fmtWeight } from '@/lib/weights';
+import type { PlannedExercise, Workout, WorkoutDay, WorkoutTemplate } from '@/lib/types';
+import { Badge, Button, Card, Segmented, Stepper } from '@/components/ui';
 import { PlateCalculatorModal } from '@/components/PlateCalculatorModal';
 import { colors, radius, space } from '@/theme';
 
@@ -21,31 +26,39 @@ export default function Today() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState<Workout | null>(null);
-  const [program, setProgram] = useState<ReturnType<typeof deriveProgram> | null>(null);
-  const [weekCount, setWeekCount] = useState(0);
+  const [template, setTemplate] = useState<WorkoutTemplate | null>(null);
+  const [lastWeights, setLastWeights] = useState<Record<string, number>>({});
+  const [sessionCount, setSessionCount] = useState(0);
+  const [next, setNext] = useState<WorkoutDay>('A');
+  const [pickedDay, setPickedDay] = useState<WorkoutDay>('A');
+  const [pickedDate, setPickedDate] = useState<Date>(new Date());
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+  const [weightEdit, setWeightEdit] = useState<{ key: string; name: string; weight: number } | null>(null);
   const [calcWeight, setCalcWeight] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
 
   const load = useCallback(async () => {
-    if (!session || !profile) return;
+    if (!session) return;
     try {
-      const [{ workouts, sets }, openWorkout] = await Promise.all([
-        fetchHistory(session.user.id),
-        fetchOpenWorkout(session.user.id),
-      ]);
-      const done = workouts.filter((w) => w.completed_at);
-      const sessions = buildSessions(done, sets);
-      setProgram(deriveProgram(profile.starting_weights, unit, sessions));
+      const temps = await fetchTemplates(session.user.id);
+      const { workouts } = await fetchHistory(session.user.id);
+      const weights = await fetchLastWeights(session.user.id);
+      const openWorkout = await fetchOpenWorkout(session.user.id);
+
+      const completed = workouts.filter((w) => w.completed_at);
+      const lastDay = completed.length > 0 ? completed[0].day : null;
+
+      setTemplate(temps);
+      setLastWeights(weights);
+      setNext(nextDay(lastDay));
+      setPickedDay(nextDay(lastDay));
+      setSessionCount(completed.length);
       setOpen(openWorkout);
-      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      setWeekCount(
-        done.filter((w) => new Date(w.completed_at ?? w.started_at).getTime() >= cutoff).length
-      );
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [session, profile, unit]);
+  }, [session]);
 
   useFocusEffect(
     useCallback(() => {
@@ -53,12 +66,19 @@ export default function Today() {
     }, [load])
   );
 
+  const currentPlan = (): PlannedExercise[] => {
+    if (!template) return [];
+    const base = buildPlan(pickedDay === 'A' ? template.A : template.B, lastWeights);
+    return base.map((p) => (overrides[p.key] != null ? { ...p, weight: overrides[p.key] } : p));
+  };
+
   const start = async () => {
-    if (!session || !program) return;
+    if (!session || !template) return;
+    const plan = currentPlan();
+    if (plan.length === 0) return;
     setStarting(true);
     try {
-      const plan = nextWorkoutPlan(program);
-      const workout = await createWorkout(session.user.id, plan.day, plan.targets);
+      const workout = await createWorkout(session.user.id, pickedDay, plan, pickedDate);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       router.push(`/workout/${workout.id}`);
     } finally {
@@ -66,7 +86,7 @@ export default function Today() {
     }
   };
 
-  if (loading || !profile) {
+  if (loading || !profile || !template) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color={colors.accent} />
@@ -74,7 +94,7 @@ export default function Today() {
     );
   }
 
-  const completed = program ? program.totalSessions : 0;
+  const plan = currentPlan();
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -95,7 +115,7 @@ export default function Today() {
           <Text style={{ color: colors.text, fontSize: 26, fontWeight: '900', letterSpacing: 1 }}>
             ARMORY
           </Text>
-          <Badge label={`${completed} SESSIONS`} tone="neutral" />
+          <Badge label={`${sessionCount} SESSIONS`} tone="neutral" />
         </View>
 
         {open ? (
@@ -112,106 +132,221 @@ export default function Today() {
               variant="ghost"
             />
           </Card>
-        ) : null}
+        ) : (
+          <Card style={{ gap: space(3) }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ color: colors.text, fontSize: 20, fontWeight: '800' }}>Log a workout</Text>
+              <Pressable hitSlop={8} onPress={() => router.push('/edit-workout')}>
+                <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 13 }}>EDIT</Text>
+              </Pressable>
+            </View>
 
-        {program && !open ? (
-          (() => {
-            const plan = nextWorkoutPlan(program);
-            return (
-              <>
-                <View style={{ flexDirection: 'row', gap: space(3) }}>
-                  {[
-                    { label: 'SESSIONS', value: String(completed) },
-                    { label: 'NEXT DAY', value: plan.day },
-                    { label: 'WEEK GOAL', value: `${Math.min(weekCount + 1, 3)}/3` },
-                  ].map((s) => (
-                    <View
-                      key={s.label}
+            <View style={{ gap: space(1.5) }}>
+              <Text style={{ color: colors.faint, fontSize: 11, fontWeight: '800', letterSpacing: 1 }}>
+                WHICH DAY {pickedDay !== next ? '· off-schedule' : ''}
+              </Text>
+              <Segmented<WorkoutDay>
+                options={[
+                  { value: 'A', label: 'Workout A' },
+                  { value: 'B', label: 'Workout B' },
+                ]}
+                value={pickedDay}
+                onChange={setPickedDay}
+              />
+            </View>
+
+            <DateStrip selected={pickedDate} onSelect={setPickedDate} />
+
+            {plan.length === 0 ? (
+              <Text style={{ color: colors.muted, fontSize: 13 }}>
+                Workout {pickedDay} is empty. Add exercises in Edit Workout to get started.
+              </Text>
+            ) : (
+              <View style={{ gap: space(2) }}>
+                {plan.map((t) => (
+                  <View
+                    key={t.key}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      backgroundColor: colors.surfaceAlt,
+                      borderColor: colors.border,
+                      borderWidth: 1,
+                      borderRadius: radius.md,
+                      paddingHorizontal: space(3),
+                      paddingVertical: space(2.5),
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>{t.name}</Text>
+                      <Text style={{ color: colors.faint, fontSize: 12, marginTop: 2 }}>
+                        {t.sets} × {t.reps}
+                      </Text>
+                    </View>
+                    {overrides[t.key] != null ? (
+                      <Badge label="ADJUSTED" tone="accent" />
+                    ) : null}
+                    <Pressable hitSlop={8} onPress={() => setCalcWeight(t.weight)} style={{ marginHorizontal: space(2) }}>
+                      <Text style={{ color: colors.accent, fontSize: 18 }}>⌗</Text>
+                    </Pressable>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={() => setWeightEdit({ key: t.key, name: t.name, weight: t.weight })}
                       style={{
-                        flex: 1,
-                        backgroundColor: colors.surface,
+                        backgroundColor: colors.surfaceAlt,
                         borderColor: colors.border,
                         borderWidth: 1,
                         borderRadius: radius.md,
-                        padding: space(3),
-                        gap: 2,
+                        paddingHorizontal: space(2.5),
+                        paddingVertical: space(1),
                       }}
                     >
-                      <Text style={{ color: colors.faint, fontSize: 10, fontWeight: '800', letterSpacing: 1 }}>
-                        {s.label}
+                      <Text style={{ color: colors.text, fontSize: 17, fontWeight: '900' }}>
+                        {t.weight > 0 ? fmtWeight(t.weight, unit) : '—'}
                       </Text>
-                      <Text style={{ color: colors.text, fontSize: 22, fontWeight: '900' }}>{s.value}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <Card style={{ gap: space(3) }}>
-                  <View>
-                    <Badge label={`WORKOUT ${plan.day}`} tone="accent" />
-                    <Text style={{ color: colors.text, fontSize: 20, fontWeight: '800', marginTop: space(2) }}>
-                      {format(new Date(), 'EEEE, d MMMM')}
-                    </Text>
+                    </Pressable>
                   </View>
+                ))}
+              </View>
+            )}
 
-                  <View style={{ gap: space(2) }}>
-                    {plan.targets.map((t) => (
-                      <View
-                        key={t.lift}
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          backgroundColor: colors.surfaceAlt,
-                          borderColor: colors.border,
-                          borderWidth: 1,
-                          borderRadius: radius.md,
-                          paddingHorizontal: space(3),
-                          paddingVertical: space(2.5),
-                        }}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>
-                            {EXERCISES[t.lift].name}
-                          </Text>
-                          <Text style={{ color: colors.faint, fontSize: 12, marginTop: 2 }}>
-                            {t.sets} × {t.reps}
-                            {program.lifts[t.lift].fails > 0
-                              ? ` · fail ${program.lifts[t.lift].fails}/3`
-                              : ''}
-                          </Text>
-                        </View>
-                        <Pressable hitSlop={8} onPress={() => setCalcWeight(t.weight)} style={{ marginRight: space(3) }}>
-                          <Text style={{ color: colors.accent, fontSize: 18 }}>⌗</Text>
-                        </Pressable>
-                        <Text style={{ color: colors.text, fontSize: 17, fontWeight: '900' }}>
-                          {fmtWeight(t.weight, unit)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-
-                  <Button
-                    label={`Start Workout ${plan.day}`}
-                    onPress={() => void start()}
-                    loading={starting}
-                  />
-                </Card>
-              </>
-            );
-          })()
-        ) : null}
+            <Button
+              label={`Log Workout ${pickedDay} · ${format(pickedDate, 'd MMM')}`}
+              onPress={() => void start()}
+              loading={starting}
+              disabled={plan.length === 0}
+            />
+            <Text style={{ color: colors.faint, fontSize: 11, textAlign: 'center' }}>
+              Pick any day to backfill a missed workout, or leave it on today.
+            </Text>
+          </Card>
+        )}
 
         <Card style={{ gap: space(1) }}>
-          <Text style={{ color: colors.text, fontWeight: '800' }}>The rules</Text>
+          <Text style={{ color: colors.text, fontWeight: '800' }}>How logging works</Text>
           <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 21 }}>
-            Hit all sets and reps → add {unit === 'kg' ? '2.5 kg' : '5 lb'} next time (deadlift{' '}
-            {unit === 'kg' ? '5 kg' : '10 lb'}). Miss any reps → repeat the weight. Fail three times →
-            deload 10% and build back up.
+            Tap a set to log it as complete at the suggested weight (your last working weight).
+            Long-press a set to adjust its weight or reps. Weights are yours — no forced increases.
           </Text>
         </Card>
       </ScrollView>
 
       <PlateCalculatorModal visible={calcWeight != null} weight={calcWeight} unit={unit} onClose={() => setCalcWeight(null)} />
+
+      <Modal visible={weightEdit != null} transparent animationType="slide" onRequestClose={() => setWeightEdit(null)}>
+        {weightEdit ? (
+          <View style={{ flex: 1, backgroundColor: 'rgba(4,6,10,0.72)', justifyContent: 'flex-end' }}>
+            <View
+              style={{
+                backgroundColor: colors.surface,
+                borderTopLeftRadius: radius.lg + 4,
+                borderTopRightRadius: radius.lg + 4,
+                borderWidth: 1,
+                borderColor: colors.border,
+                padding: space(6),
+                paddingBottom: space(10),
+                gap: space(4),
+              }}
+            >
+              <View>
+                <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '900', letterSpacing: 2 }}>
+                  WEIGHT FOR THIS WORKOUT
+                </Text>
+                <Text style={{ color: colors.text, fontSize: 22, fontWeight: '800' }}>{weightEdit.name}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: colors.muted, fontWeight: '700' }}>Working weight</Text>
+                <Stepper value={weightEdit.weight} step={SMALLEST_PLATE[unit as 'kg'] * 2} min={0} suffix={unit} onChange={(v) => setWeightEdit({ ...weightEdit, weight: v })} />
+              </View>
+              <Button
+                label="Use this weight"
+                variant="primary"
+                onPress={() => {
+                  if (weightEdit) setOverrides((o) => ({ ...o, [weightEdit.key]: weightEdit.weight }));
+                  setWeightEdit(null);
+                }}
+              />
+              <Button label="Cancel" variant="ghost" onPress={() => setWeightEdit(null)} />
+            </View>
+          </View>
+        ) : null}
+      </Modal>
+    </View>
+  );
+}
+
+function DateStrip({
+  selected,
+  onSelect,
+}: {
+  selected: Date;
+  onSelect: (d: Date) => void;
+}) {
+  const days = useMemo(() => {
+    const out: Date[] = [];
+    for (let i = 27; i >= 0; i--) out.push(addDays(new Date(), -i));
+    return out;
+  }, []);
+  const selectedKey = format(selected, 'yyyy-MM-dd');
+
+  return (
+    <View>
+      <Text style={{ color: colors.faint, fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: space(1.5) }}>
+        WHICH DATE
+      </Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: space(1.5), paddingVertical: 2 }}
+      >
+        {days.map((d) => {
+          const key = format(d, 'yyyy-MM-dd');
+          const active = key === selectedKey;
+          return (
+            <Pressable
+              key={key}
+              onPress={() => onSelect(d)}
+              style={{
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: space(2.5),
+                paddingVertical: space(1.5),
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: active ? colors.accent : colors.border,
+                backgroundColor: active ? colors.accentSoft : colors.surfaceAlt,
+                minWidth: 56,
+              }}
+            >
+              <Text style={{ color: colors.faint, fontSize: 10, fontWeight: '700' }}>
+                {format(d, 'EEE')}
+              </Text>
+              <Text style={{ color: active ? colors.accent : colors.text, fontSize: 16, fontWeight: '800' }}>
+                {format(d, 'd')}
+              </Text>
+              <Text style={{ color: colors.faint, fontSize: 10, fontWeight: '700' }}>
+                {format(d, 'MMM')}
+              </Text>
+            </Pressable>
+          );
+        })}
+        <Pressable
+          onPress={() => onSelect(new Date())}
+          style={{
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: space(2.5),
+            paddingVertical: space(1.5),
+            borderRadius: radius.md,
+            borderWidth: 1,
+            borderColor: colors.accent,
+            backgroundColor: colors.accentSoft,
+          }}
+        >
+          <Text style={{ color: colors.accent, fontWeight: '800', fontSize: 12 }}>TODAY</Text>
+        </Pressable>
+      </ScrollView>
     </View>
   );
 }
