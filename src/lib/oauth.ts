@@ -8,7 +8,7 @@ export interface OAuthResult {
 }
 
 export function oauthRedirectUri(): string {
-  return makeRedirectUri();
+  return makeRedirectUri({ native: 'armory://auth/callback', path: 'auth/callback' });
 }
 
 export async function signInWithGoogle(): Promise<OAuthResult> {
